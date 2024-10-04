@@ -18,7 +18,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use('/api', apiRoutes);
 
 // Start server
-const port = 7080;
+const port = 7090;
 app.listen(port, () => {
   console.log(`Server running on http://localhost:${port}`);
 });
