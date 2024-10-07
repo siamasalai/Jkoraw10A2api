@@ -8,9 +8,10 @@ const dbConfig = require('../db-details');
 // Create MySQL connection pool
 const db = mysql.createPool(dbConfig);
 
+
 // GET method to retrieve all categories
 router.get('/categories', (req, res) => {
-    const query = 'SELECT CATEGORY_ID, NAME FROM CATEGORIES'; // Ensure this matches your database
+    const query = 'SELECT CATEGORY_ID, NAME FROM category'; // Updated table name
     db.query(query, (err, results) => {
         if (err) {
             console.error('Error fetching categories:', err);
@@ -25,10 +26,13 @@ router.get('/fundraiser/:id', (req, res) => {
     const fundraiserId = req.params.id;
 
     const fundraiserQuery = `
-        SELECT * FROM FUNDRAISER WHERE FUNDRAISER_ID = ?
+        SELECT f.*, c.NAME as CATEGORY_NAME
+        FROM fundraiser f
+        JOIN category c ON f.CATEGORY_ID = c.CATEGORY_ID
+        WHERE f.FUNDRAISER_ID = ?
     `;
     const donationsQuery = `
-        SELECT * FROM DONATION WHERE FUNDRAISER_ID = ?
+        SELECT * FROM donation WHERE FUNDRAISER_ID = ?
     `;
 
     db.query(fundraiserQuery, [fundraiserId], (err, fundraiserResults) => {
@@ -58,6 +62,7 @@ router.get('/fundraiser/:id', (req, res) => {
                 CITY: fundraiser.CITY,
                 ACTIVE: fundraiser.ACTIVE,
                 CATEGORY_ID: fundraiser.CATEGORY_ID,
+                CATEGORY_NAME: fundraiser.CATEGORY_NAME,
                 donations: donationsResults.map(donation => ({
                     DONATION_ID: donation.DONATION_ID,
                     NAME: donation.NAME,
@@ -75,11 +80,15 @@ router.get('/fundraiser/:id', (req, res) => {
 // POST method to insert a new donation
 router.post('/donation', (req, res) => {
     const insertDonationQuery = `
-        INSERT INTO DONATION (FUNDRAISER_ID, NAME, DATE, AMOUNT, GIVER)
+        INSERT INTO donation (FUNDRAISER_ID, NAME, DATE, AMOUNT, GIVER)
         VALUES (?, ?, ?, ?, ?)
     `;
 
-    const { fundraiserId, name, date, amount, giver } = req.body; // Accepting data from the request body
+    const { fundraiserId, name, date, amount, giver } = req.body;
+
+    if (amount <= 0) {
+        return res.status(400).json({ error: 'Donation amount must be positive' });
+    }
 
     db.query(insertDonationQuery, [fundraiserId, name, date, amount, giver], (err, result) => {
         if (err) {
@@ -87,7 +96,21 @@ router.post('/donation', (req, res) => {
             return res.status(500).json({ error: 'Database error' });
         }
 
-        res.status(201).json({ message: 'Donation added successfully', donationId: result.insertId });
+        // Update CURRENT_FUNDING in the fundraiser table
+        const updateFundraiserQuery = `
+            UPDATE fundraiser 
+            SET CURRENT_FUNDING = CURRENT_FUNDING + ?
+            WHERE FUNDRAISER_ID = ? AND CURRENT_FUNDING + ? <= TARGET_FUNDING
+        `;
+
+        db.query(updateFundraiserQuery, [amount, fundraiserId, amount], (updateErr, updateResult) => {
+            if (updateErr || updateResult.affectedRows === 0) {
+                console.error('Error updating fundraiser:', updateErr);
+                return res.status(500).json({ error: 'Error updating fundraiser funding' });
+            }
+
+            res.status(201).json({ message: 'Donation added successfully', donationId: result.insertId });
+        });
     });
 });
 
@@ -96,8 +119,8 @@ router.post('/fundraiser', (req, res) => {
     const { organizer, caption, targetFunding, city, active, categoryId } = req.body;
 
     const insertFundraiserQuery = `
-        INSERT INTO FUNDRAISER (ORGANIZER, CAPTION, TARGET_FUNDING, CITY, ACTIVE, CATEGORY_ID)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO fundraiser (ORGANIZER, CAPTION, TARGET_FUNDING, CURRENT_FUNDING, CITY, ACTIVE, CATEGORY_ID)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
     `;
 
     db.query(insertFundraiserQuery, [organizer, caption, targetFunding, city, active, categoryId], (err, result) => {
@@ -116,7 +139,7 @@ router.put('/fundraiser/:id', (req, res) => {
     const { organizer, caption, targetFunding, currentFunding, city, active, categoryId } = req.body;
 
     const updateFundraiserQuery = `
-        UPDATE FUNDRAISER 
+        UPDATE fundraiser 
         SET ORGANIZER = ?, CAPTION = ?, TARGET_FUNDING = ?, CURRENT_FUNDING = ?, CITY = ?, ACTIVE = ?, CATEGORY_ID = ?
         WHERE FUNDRAISER_ID = ?
     `;
@@ -140,7 +163,7 @@ router.delete('/fundraiser/:id', (req, res) => {
     const fundraiserId = req.params.id;
 
     const donationsExistQuery = `
-        SELECT COUNT(*) AS donationCount FROM DONATION WHERE FUNDRAISER_ID = ?
+        SELECT COUNT(*) AS donationCount FROM donation WHERE FUNDRAISER_ID = ?
     `;
 
     db.query(donationsExistQuery, [fundraiserId], (err, results) => {
@@ -154,7 +177,7 @@ router.delete('/fundraiser/:id', (req, res) => {
         }
 
         const deleteFundraiserQuery = `
-            DELETE FROM FUNDRAISER WHERE FUNDRAISER_ID = ?
+            DELETE FROM fundraiser WHERE FUNDRAISER_ID = ?
         `;
 
         db.query(deleteFundraiserQuery, [fundraiserId], (err, result) => {
